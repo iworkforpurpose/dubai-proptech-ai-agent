@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aman | Dubai PropTech AI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         .chat-container::-webkit-scrollbar {
             width: 6px;
@@ -132,14 +133,14 @@
         function appendBotResponse(responseText, typingId) {
             document.getElementById(typingId).remove();
             
-            // Basic formatting for newlines
-            const formattedText = responseText.replace(/\n/g, '<br>');
+            // Parse Markdown to HTML for professional rendering
+            const formattedHtml = marked.parse(responseText);
 
             const msgHtml = `
                 <div class="flex gap-4 mb-4">
                     <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
-                    <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] text-gray-800 leading-relaxed">
-                        ${formattedText}
+                    <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] text-gray-800 leading-relaxed prose prose-blue prose-sm sm:prose-base">
+                        ${formattedHtml}
                     </div>
                 </div>
             `;
