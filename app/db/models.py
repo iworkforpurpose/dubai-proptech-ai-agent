@@ -16,5 +16,5 @@ class Property(Base):
     amenities = Column(String) # Stored as comma-separated string for simplicity
     status = Column(String, default="available")
     
-    # 1536 is the dimension size for OpenAI's text-embedding-3-small model
-    embedding = Column(Vector(1536)) 
+    # 1024 is the dimension size for BAAI/bge-large-en-v1.5
+    embedding = Column(Vector(1024)) 

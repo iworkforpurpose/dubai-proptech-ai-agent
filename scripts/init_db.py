@@ -12,6 +12,8 @@ def init_db():
         conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
         conn.commit()
 
+    print("Dropping existing tables to reset dimensions...")
+    Base.metadata.drop_all(bind=engine)
     print("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     print("Database initialization complete.")

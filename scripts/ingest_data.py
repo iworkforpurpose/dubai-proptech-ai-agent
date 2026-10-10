@@ -2,40 +2,30 @@ import os
 import sys
 import json
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from openai import OpenAI
 from app.db.session import SessionLocal
 from app.db.models import Property
 
-# Load environment variables
-load_dotenv()
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Load high-accuracy local embedding model
+print("Loading state-of-the-art local embedding model (BAAI/bge-large-en-v1.5)...")
+model = SentenceTransformer('BAAI/bge-large-en-v1.5')
 
 def get_embedding(text):
-    response = client.embeddings.create(
-        input=text,
-        model="text-embedding-3-small"
-    )
-    return response.data[0].embedding
+    # Returns a 384-dimensional numpy array, converted to list
+    return model.encode(text).tolist()
 
 def ingest_data():
-    if not os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") == "your_openai_api_key_here":
-        print("ERROR: Please add your OPENAI_API_KEY to the .env file.")
-        return
-
     db = SessionLocal()
     
     with open("mock_dubai_properties.json", "r") as f:
         properties = json.load(f)
         
-    print(f"Loaded {len(properties)} properties. Starting vector embedding and database insertion...")
+    print(f"Loaded {len(properties)} properties. Starting local vector embedding and database insertion...")
     
     for i, prop in enumerate(properties):
-        # We create a rich text representation to embed so the AI can search it semantically
         embed_text = f"Title: {prop['title']}. Location: {prop['location']}. Type: {prop['property_type']}. " \
                      f"Price: {prop['price_aed']} AED. Bedrooms: {prop['bedrooms']}. Bathrooms: {prop['bathrooms']}. " \
                      f"Amenities: {', '.join(prop['amenities'])}. Description: {prop['description']}"
@@ -61,7 +51,7 @@ def ingest_data():
             
     db.commit()
     db.close()
-    print("Ingestion complete! All properties are now stored as vectors.")
+    print("Ingestion complete! All properties are now stored as vectors using local embeddings.")
 
 if __name__ == "__main__":
     ingest_data()
