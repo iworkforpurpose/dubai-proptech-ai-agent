@@ -37,12 +37,12 @@
         }
     </style>
 </head>
-<body class="bg-gray-50 h-screen flex flex-col font-sans">
+<body class="bg-white h-screen flex flex-col font-sans">
     
     <!-- Navbar -->
     <nav class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
         <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-xl">A</div>
+            <div class="w-10 h-10 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold text-xl">A</div>
             <div>
                 <h1 class="font-bold text-gray-900 text-lg leading-tight">Aman AI</h1>
                 <p class="text-xs text-green-500 font-medium">● Online</p>
@@ -56,7 +56,7 @@
         
         <!-- Welcome Message -->
         <div class="flex gap-4">
-            <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
+            <div class="w-8 h-8 rounded-full bg-orange-500 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
             <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] text-gray-800">
                 <p class="mb-2">Hello! I am Aman, your autonomous real estate agent for Dubai.</p>
                 <p class="text-sm text-gray-600">I have access to hundreds of properties across the city. Tell me exactly what you are looking for in plain English (e.g., <i>"I want a 2-bedroom apartment in JVC under 1.5 million AED with a pool"</i>).</p>
@@ -72,12 +72,12 @@
                 <input 
                     type="text" 
                     id="user-input" 
-                    class="w-full bg-gray-50 border border-gray-300 rounded-full px-6 py-4 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-inner text-gray-800"
+                    class="w-full bg-white border border-gray-300 rounded-full px-6 py-4 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 transition-all shadow-inner text-gray-800"
                     placeholder="Describe your dream property in Dubai..."
                     autocomplete="off"
                     required
                 >
-                <button type="submit" id="send-btn" class="bg-blue-600 hover:bg-blue-700 text-white rounded-full p-4 transition-colors flex-shrink-0 shadow-md">
+                <button type="submit" id="send-btn" class="bg-orange-500 hover:bg-orange-600 text-white rounded-full p-4 transition-colors flex-shrink-0 shadow-md">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                 </button>
             </form>
@@ -102,7 +102,7 @@
             const msgHtml = `
                 <div class="flex gap-4 self-end flex-row-reverse">
                     <div class="w-8 h-8 rounded-full bg-gray-800 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">U</div>
-                    <div class="bg-blue-600 text-white rounded-2xl rounded-tr-none px-5 py-3 shadow-sm max-w-[85%]">
+                    <div class="bg-orange-500 text-white rounded-2xl rounded-tr-none px-5 py-3 shadow-sm max-w-[85%]">
                         <p>${text}</p>
                     </div>
                 </div>
@@ -115,7 +115,7 @@
             const id = 'typing-' + Date.now();
             const msgHtml = `
                 <div id="${id}" class="flex gap-4">
-                    <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
+                    <div class="w-8 h-8 rounded-full bg-orange-500 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
                     <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] flex items-center h-[52px]">
                         <div class="typing-indicator">
                             <div class="dot"></div>
@@ -138,8 +138,8 @@
 
             const msgHtml = `
                 <div class="flex gap-4 mb-4">
-                    <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
-                    <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] text-gray-800 leading-relaxed prose prose-blue prose-sm sm:prose-base">
+                    <div class="w-8 h-8 rounded-full bg-orange-500 flex-shrink-0 flex items-center justify-center text-white font-bold text-sm">A</div>
+                    <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-5 py-4 shadow-sm max-w-[85%] text-gray-800 leading-relaxed prose prose-orange prose-sm sm:prose-base">
                         ${formattedHtml}
                     </div>
                 </div>
