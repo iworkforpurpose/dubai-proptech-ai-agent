@@ -1,6 +1,7 @@
 from langchain_ollama import ChatOllama
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
+from typing import Optional
 import sys
 import os
 
@@ -17,32 +18,62 @@ from app.main import embedding_model
 llm = ChatOllama(model="llama3.1", temperature=0)
 
 @tool
-def search_dubai_properties(query: str, max_results: int = 3) -> str:
+def search_dubai_properties(
+    semantic_query: str, 
+    max_price_aed: Optional[float] = None,
+    min_bedrooms: Optional[int] = None,
+    location: Optional[str] = None,
+    max_results: int = 4
+) -> str:
     """
-    Search the real estate database for properties in Dubai based on the user's natural language criteria.
-    Use this tool whenever a user asks to find, buy, or rent a property, or mentions a location/budget.
+    Search the real estate database for properties in Dubai.
+    Use this tool whenever a user asks to find, buy, or rent a property.
+    Extract max_price_aed (e.g. 'under 3 million' = 3000000), min_bedrooms (e.g. '2BHK' = 2), and location if mentioned.
+    The semantic_query should capture the vibe or specific amenities (e.g., 'luxurious waterfront apartment with pool').
     """
     db = SessionLocal()
     try:
-        vector = embedding_model.encode(query).tolist()
-        sql = text("""
-            SELECT title, location, price_aed, property_type, bedrooms, bathrooms, amenities
-            FROM properties
-            ORDER BY embedding <=> :vector
-            LIMIT :limit
-        """)
-        results = db.execute(sql, {"vector": str(vector), "limit": max_results}).fetchall()
+        vector = embedding_model.encode(semantic_query).tolist()
+        
+        # Build dynamic SQL for Hybrid Search
+        query_parts = [
+            "SELECT title, location, price_aed, property_type, bedrooms, bathrooms, amenities",
+            "FROM properties",
+            "WHERE 1=1"
+        ]
+        params = {"vector": str(vector), "limit": max_results}
+        
+        if max_price_aed:
+            query_parts.append("AND price_aed <= :max_price")
+            params["max_price"] = max_price_aed
+            
+        if min_bedrooms:
+            query_parts.append("AND bedrooms >= :min_beds")
+            params["min_beds"] = min_bedrooms
+            
+        if location:
+            query_parts.append("AND location ILIKE :loc")
+            params["loc"] = f"%{location}%"
+            
+        query_parts.append("ORDER BY embedding <=> :vector LIMIT :limit")
+        
+        sql = text(" ".join(query_parts))
+        results = db.execute(sql, params).fetchall()
         
         if not results:
-            return "No matching properties found in the database."
+            return "No matching properties found in the database. Tell the user to broaden their search criteria."
             
         formatted_results = []
         for row in results:
+            # Format price nicely like 3.2M AED
+            price_formatted = f"{(row.price_aed / 1000000):.2f}M" if row.price_aed >= 1000000 else f"{row.price_aed:,.0f}"
             formatted_results.append(
-                f"- {row.title} in {row.location}. {row.bedrooms} beds, {row.bathrooms} baths. "
-                f"Price: {row.price_aed:,.0f} AED. Amenities: {row.amenities}."
+                f"- **{row.title} in {row.location}**\n"
+                f"  - **Price:** {price_formatted} AED\n"
+                f"  - **Size:** {row.bedrooms} Beds, {row.bathrooms} Baths\n"
+                f"  - **Amenities:** {row.amenities}"
             )
-        return "\n".join(formatted_results)
+        return "\n\n".join(formatted_results)
     finally:
         db.close()
 
@@ -50,17 +81,15 @@ def search_dubai_properties(query: str, max_results: int = 3) -> str:
 llm_with_tools = llm.bind_tools([search_dubai_properties])
 
 SYSTEM_PROMPT = """You are Aman, an elite, highly professional autonomous real estate agent in Dubai. 
-You are speaking directly to a potential buyer or tenant.
+You are speaking directly to a potential luxury buyer or tenant.
 
 RULES:
 1. When a user asks for properties, you MUST use the `search_dubai_properties` tool.
-2. NEVER invent or hallucinate properties. Only recommend properties returned by the tool.
-3. Present the properties in a clean, luxurious, and readable format using Markdown.
-   - Use **bold** for property titles and prices.
-   - Use bullet points for amenities.
-   - Keep your tone sophisticated and helpful, fitting for the Dubai luxury real estate market.
-4. If a user just says 'hello', introduce yourself elegantly and ask what kind of property they are looking for in Dubai.
-5. If no properties are found, politely suggest they adjust their criteria (e.g., budget or location).
+2. Formulate the tool arguments carefully. Translate '2BHK' to min_bedrooms=2, '3 million' to max_price_aed=3000000.
+3. NEVER invent or hallucinate properties. Only recommend the properties returned by the tool.
+4. CRITICAL: The tool returns perfectly formatted Markdown lists of properties. You MUST include this exact markdown list in your final message to the user! Never hide the properties.
+5. Wrap the property list with a luxurious, polite conversational greeting and closing.
+6. If a user just says 'hello', introduce yourself elegantly and ask what kind of property they are looking for in Dubai.
 """
 
 def chat_with_agent(user_input: str) -> str:
@@ -69,22 +98,17 @@ def chat_with_agent(user_input: str) -> str:
         HumanMessage(content=user_input)
     ]
     
-    # First pass: Let the LLM think and decide if it needs to use the database tool
     response = llm_with_tools.invoke(messages)
     
-    # If the LLM decided to use the search tool
     if response.tool_calls:
         messages.append(response)
         
         for tool_call in response.tool_calls:
             if tool_call["name"] == "search_dubai_properties":
-                # Execute the semantic search
                 tool_msg = search_dubai_properties.invoke(tool_call)
                 messages.append(tool_msg)
                 
-        # Second pass: Let the LLM read the database results and formulate a human response
         final_response = llm_with_tools.invoke(messages)
         return final_response.content
         
-    # If it was just a greeting, return the conversational response
     return response.content
