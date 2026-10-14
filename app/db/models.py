@@ -22,6 +22,6 @@ class Property(Base):
     parking_spaces = Column(Integer)
     property_age = Column(Integer)
 
-    # text-embedding-3-large produces 3072-dimensional vectors
-    # This is the best OpenAI embedding model for semantic search
-    embedding = Column(Vector(3072))
+    # Google text-embedding-004 outputs 768-dimensional vectors
+    # Highly compact, fast indexing in pgvector, high MTEB retrieval accuracy
+    embedding = Column(Vector(768))

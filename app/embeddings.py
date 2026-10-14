@@ -1,33 +1,51 @@
 """
-Centralized embedding module.
-Reason for choice: text-embedding-3-large (OpenAI)
-  - 3072 dimensions (highest fidelity)
-  - MTEB score: 64.6 (best available via API)
-  - Sub-300ms latency via API vs 8-12s on local CPU
-  - Zero local model management — scales automatically
+Centralized Google Gemini embedding module.
+Model: text-embedding-004
+  - 768 dimensions (optimal for fast vector indexing in pgvector)
+  - Top tier on MTEB Retrieval benchmark
+  - Free tier available on Google AI Studio
+  - Cloud API, sub-300ms latency, zero local CPU load
 """
 import os
-from openai import OpenAI
+from dotenv import load_dotenv
+from google import genai
 
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+load_dotenv()
 
-EMBEDDING_MODEL = "text-embedding-3-large"
-EMBEDDING_DIM = 3072
+EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_DIM = 768
+
+_client = None
+
+
+def get_genai_client() -> genai.Client:
+    global _client
+    if _client is None:
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set. "
+                "Please add GEMINI_API_KEY to your .env file."
+            )
+        _client = genai.Client(api_key=api_key)
+    return _client
 
 
 def get_embedding(text: str) -> list[float]:
-    """Embed a single text string using OpenAI text-embedding-3-large."""
-    response = _client.embeddings.create(
+    """Embed a single text string using Google text-embedding-004 (768 dimensions)."""
+    client = get_genai_client()
+    response = client.models.embed_content(
         model=EMBEDDING_MODEL,
-        input=text
+        contents=text,
     )
-    return response.data[0].embedding
+    return response.embeddings[0].values
 
 
 def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts in one API call (more efficient for ingestion)."""
-    response = _client.embeddings.create(
+    """Embed a batch of texts in one call using Google text-embedding-004."""
+    client = get_genai_client()
+    response = client.models.embed_content(
         model=EMBEDDING_MODEL,
-        input=texts
+        contents=texts,
     )
-    return [item.embedding for item in response.data]
+    return [e.values for e in response.embeddings]

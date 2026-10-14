@@ -1,17 +1,15 @@
 """
-Real data ingestion pipeline.
+Real Dubai property data ingestion pipeline using Google Gemini text-embedding-004.
 
-Data source: Dubai_Real_Estate_Dataset.csv
-Source URL: https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv
-Rows: ~2,000 real Dubai property listings
-
-Embedding model: text-embedding-3-large (OpenAI, 3072-dim)
-Reason: Best available semantic embedding accuracy via API, zero local GPU needed.
-Ingests in batches of 50 to stay within OpenAI rate limits.
+Data source: Dubai_Real_Estate_Dataset.csv (~2,000 real Dubai listings)
+Source: https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv
+Embedding model: text-embedding-004 (768 dimensions)
+Database: PostgreSQL + pgvector
 """
 import os
 import sys
 import csv
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -25,15 +23,11 @@ from app.db.models import Property
 from app.embeddings import get_embeddings_batch
 
 DATASET_URL = "https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv"
-BATCH_SIZE = 50  # OpenAI embedding API batch limit sweet spot
+BATCH_SIZE = 30  # Sized for rate-limit safety and fast processing
 
 
 def build_embed_text(row: dict) -> str:
-    """
-    Construct a rich, descriptive text for semantic embedding.
-    This text is what the vector search will compare against user queries.
-    The richer and more natural this text, the more accurate the similarity search.
-    """
+    """Construct semantic embedding text representation of real property."""
     return (
         f"{row['Property_Type']} for sale in {row['Location']}, Dubai. "
         f"{row['Bedrooms']} bedrooms, {row['Bathrooms']} bathrooms, "
@@ -46,43 +40,47 @@ def build_embed_text(row: dict) -> str:
     )
 
 
-def run_ingestion():
-    # Step 1: Drop and recreate the table cleanly
-    print("⚠️  Dropping old properties table and recreating with new schema...")
+def run_ingestion(limit: int = None):
+    # Step 1: Re-create schema with Vector(768)
+    print("⚠️  Dropping old properties table and recreating with Vector(768)...")
     with engine.connect() as conn:
         conn.execute(text("DROP TABLE IF EXISTS properties CASCADE"))
         conn.commit()
 
-    # Recreate with the new schema (including Vector(3072))
     Base.metadata.create_all(bind=engine)
-    print("✅ Schema created: properties table with vector(3072) for text-embedding-3-large")
+    print("✅ Schema created: properties table with Vector(768) for text-embedding-004")
 
-    # Step 2: Download the real dataset
-    print(f"\n📡 Downloading real Dubai property dataset from GitHub...")
+    # Step 2: Download real dataset
+    print("\n📡 Fetching real Dubai properties dataset...")
     response = requests.get(DATASET_URL, timeout=30)
     response.raise_for_status()
     lines = response.text.splitlines()
     reader = csv.DictReader(lines)
     rows = list(reader)
-    print(f"✅ Downloaded {len(rows)} real Dubai property records")
 
-    # Step 3: Process in batches
-    db = SessionLocal()
+    if limit:
+        rows = rows[:limit]
+
     total = len(rows)
+    print(f"✅ Loaded {total} real Dubai listings for ingestion.")
+
+    # Step 3: Embed and insert in batches
+    db = SessionLocal()
     inserted = 0
 
     try:
         for batch_start in range(0, total, BATCH_SIZE):
             batch = rows[batch_start: batch_start + BATCH_SIZE]
+            embed_texts = [build_embed_text(r) for r in batch]
 
-            # Build embed texts for the whole batch
-            embed_texts = [build_embed_text(row) for row in batch]
+            batch_num = (batch_start // BATCH_SIZE) + 1
+            total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+            print(f"  🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} records)...")
 
-            # Get all embeddings in a single API call (efficient)
-            print(f"  🔄 Embedding batch {batch_start // BATCH_SIZE + 1} ({len(batch)} records)...")
+            # Call text-embedding-004
             embeddings = get_embeddings_batch(embed_texts)
 
-            # Insert into DB
+            # Insert batch into PostgreSQL
             for row, embedding in zip(batch, embeddings):
                 prop = Property(
                     property_id=row["Property_ID"],
@@ -107,14 +105,17 @@ def run_ingestion():
             inserted += len(batch)
             print(f"  ✅ Inserted {inserted}/{total} properties")
 
+            # Brief pause between batches to prevent free-tier throttling
+            time.sleep(0.5)
+
     except Exception as e:
         db.rollback()
-        print(f"❌ Ingestion failed at batch {batch_start}: {e}")
+        print(f"❌ Ingestion stopped at batch starting at index {batch_start}: {e}")
         raise
     finally:
         db.close()
 
-    print(f"\n🎉 Ingestion complete! {inserted} real Dubai properties stored with 3072-dim embeddings.")
+    print(f"\n🎉 Ingestion complete! Successfully ingested {inserted} real Dubai properties into PostgreSQL with 768-dim embeddings.")
 
 
 if __name__ == "__main__":
