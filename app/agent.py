@@ -26,10 +26,9 @@ from app.embeddings import get_embedding
 # Retrieve API key
 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-# Initialize Gemini 2.0 Flash
+# Initialize Gemini 3.5 Flash-Lite (Highest available quota, sub-second speed, active)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
-    temperature=0,
+    model="gemini-3.5-flash-lite",
     google_api_key=api_key,
 )
 
@@ -149,9 +148,25 @@ RULES:
 7. Maintain awareness of the conversation history to provide seamless follow-ups."""
 
 
+def _extract_text(content) -> str:
+    """Normalize LangChain/Gemini content whether string or list of dict parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts)
+    return str(content)
+
+
 def chat_with_agent(user_input: str, session_id: str = "default") -> str:
     """
-    Process user query with session memory and multi-step tool execution.
+    Process user query with session memory and dynamic multi-step tool execution loop.
+    Supports complex queries where Gemini chooses to search multiple categories sequentially.
     """
     if session_id not in _session_store:
         _session_store[session_id] = [SystemMessage(content=SYSTEM_PROMPT)]
@@ -159,12 +174,18 @@ def chat_with_agent(user_input: str, session_id: str = "default") -> str:
     history = _session_store[session_id]
     history.append(HumanMessage(content=user_input))
 
-    # First pass: Gemini plans and chooses whether to execute the tool
-    response = llm_with_tools.invoke(history)
-    history.append(response)
+    max_steps = 5
+    for _ in range(max_steps):
+        response = llm_with_tools.invoke(history)
+        history.append(response)
 
-    # If Gemini invoked tool calls
-    if response.tool_calls:
+        # If model is done executing tools and produced a final response
+        if not response.tool_calls:
+            text_out = _extract_text(response.content).strip()
+            if text_out:
+                return text_out
+
+        # Execute any tool calls in this step
         for tool_call in response.tool_calls:
             if tool_call["name"] == "search_dubai_properties":
                 tool_result = search_dubai_properties.invoke(tool_call)
@@ -172,9 +193,7 @@ def chat_with_agent(user_input: str, session_id: str = "default") -> str:
                     ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"])
                 )
 
-        # Second pass: Gemini reads the tool result and formats the final luxury response
-        final_response = llm_with_tools.invoke(history)
-        history.append(final_response)
-        return final_response.content
-
-    return response.content
+    # Fallback if loop exhausted tool calls without producing final text
+    final_response = llm.invoke(history)
+    history.append(final_response)
+    return _extract_text(final_response.content)

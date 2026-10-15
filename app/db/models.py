@@ -22,6 +22,5 @@ class Property(Base):
     parking_spaces = Column(Integer)
     property_age = Column(Integer)
 
-    # Google text-embedding-004 outputs 768-dimensional vectors
-    # Highly compact, fast indexing in pgvector, high MTEB retrieval accuracy
-    embedding = Column(Vector(768))
+    # Google gemini-embedding-2 outputs 3072-dimensional vectors
+    embedding = Column(Vector(3072))

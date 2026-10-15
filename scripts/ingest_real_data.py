@@ -1,10 +1,11 @@
 """
-Real Dubai property data ingestion pipeline using Google Gemini text-embedding-004.
+Self-healing real Dubai property data ingestion pipeline using Google gemini-embedding-2.
 
-Data source: Dubai_Real_Estate_Dataset.csv (~2,000 real Dubai listings)
-Source: https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv
-Embedding model: text-embedding-004 (768 dimensions)
-Database: PostgreSQL + pgvector
+Features:
+- Idempotent: Skips already ingested properties via Property_ID index.
+- Rate-limit aware: Batches requests with pacing to stay well within free tier limits.
+- Automatic 429 retry: Backs off and resumes if throttled.
+- Clean progress logging.
 """
 import os
 import sys
@@ -23,7 +24,8 @@ from app.db.models import Property
 from app.embeddings import get_embeddings_batch
 
 DATASET_URL = "https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv"
-BATCH_SIZE = 30  # Sized for rate-limit safety and fast processing
+BATCH_SIZE = 15  # Keeps per-minute requests well under the 100 req/min free tier limit
+DELAY_BETWEEN_BATCHES_SEC = 12.0  # 15 items / 12s = ~75 reqs/min
 
 
 def build_embed_text(row: dict) -> str:
@@ -40,47 +42,76 @@ def build_embed_text(row: dict) -> str:
     )
 
 
-def run_ingestion(limit: int = None):
-    # Step 1: Re-create schema with Vector(768)
-    print("⚠️  Dropping old properties table and recreating with Vector(768)...")
-    with engine.connect() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS properties CASCADE"))
-        conn.commit()
-
+def run_ingestion(limit: int = None, reset_table: bool = False):
+    # Step 1: Initialize schema if needed
+    if reset_table:
+        print("⚠️  Dropping old properties table and recreating with Vector(3072)...")
+        with engine.connect() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS properties CASCADE"))
+            conn.commit()
     Base.metadata.create_all(bind=engine)
-    print("✅ Schema created: properties table with Vector(768) for text-embedding-004")
 
-    # Step 2: Download real dataset
+    # Step 2: Download dataset
     print("\n📡 Fetching real Dubai properties dataset...")
     response = requests.get(DATASET_URL, timeout=30)
     response.raise_for_status()
     lines = response.text.splitlines()
     reader = csv.DictReader(lines)
-    rows = list(reader)
+    all_rows = list(reader)
 
     if limit:
-        rows = rows[:limit]
+        all_rows = all_rows[:limit]
 
-    total = len(rows)
-    print(f"✅ Loaded {total} real Dubai listings for ingestion.")
-
-    # Step 3: Embed and insert in batches
+    # Step 3: Find existing property IDs in DB to enable resume
     db = SessionLocal()
+    try:
+        existing_ids = set(
+            row[0] for row in db.execute(text("SELECT property_id FROM properties")).fetchall()
+        )
+    finally:
+        db.close()
+
+    rows_to_ingest = [r for r in all_rows if r["Property_ID"] not in existing_ids]
+    print(f"✅ Found {len(existing_ids)} existing properties in database.")
+    print(f"📦 {len(rows_to_ingest)} new properties remaining to ingest (out of {len(all_rows)} total).")
+
+    if not rows_to_ingest:
+        print("🎉 Database is already fully populated with all requested properties!")
+        return
+
+    # Step 4: Batch embed and insert with rate limit protection
+    total = len(rows_to_ingest)
     inserted = 0
 
-    try:
-        for batch_start in range(0, total, BATCH_SIZE):
-            batch = rows[batch_start: batch_start + BATCH_SIZE]
-            embed_texts = [build_embed_text(r) for r in batch]
+    for batch_start in range(0, total, BATCH_SIZE):
+        batch = rows_to_ingest[batch_start: batch_start + BATCH_SIZE]
+        embed_texts = [build_embed_text(r) for r in batch]
+        batch_num = (batch_start // BATCH_SIZE) + 1
+        total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
 
-            batch_num = (batch_start // BATCH_SIZE) + 1
-            total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-            print(f"  🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} records)...")
+        # Embed with automatic 429 retry
+        embeddings = None
+        for attempt in range(5):
+            try:
+                print(f"  🔄 Embedding batch {batch_num}/{total_batches} ({len(batch)} records)...")
+                embeddings = get_embeddings_batch(embed_texts)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    print(f"  ⏳ Rate limit reached. Backing off for 60s before retrying batch {batch_num}...")
+                    time.sleep(60)
+                else:
+                    print(f"  ❌ Non-rate-limit error: {e}")
+                    raise
 
-            # Call text-embedding-004
-            embeddings = get_embeddings_batch(embed_texts)
+        if embeddings is None:
+            print(f"❌ Failed to embed batch {batch_num} after retries. Aborting.")
+            break
 
-            # Insert batch into PostgreSQL
+        # Insert batch into PostgreSQL
+        db = SessionLocal()
+        try:
             for row, embedding in zip(batch, embeddings):
                 prop = Property(
                     property_id=row["Property_ID"],
@@ -100,23 +131,26 @@ def run_ingestion(limit: int = None):
                     embedding=embedding,
                 )
                 db.add(prop)
-
             db.commit()
             inserted += len(batch)
-            print(f"  ✅ Inserted {inserted}/{total} properties")
+            print(f"  ✅ Inserted {len(batch)} items. Total in DB: {len(existing_ids) + inserted}")
+        except Exception as e:
+            db.rollback()
+            print(f"  ❌ DB insertion error: {e}")
+            raise
+        finally:
+            db.close()
 
-            # Brief pause between batches to prevent free-tier throttling
-            time.sleep(0.5)
+        # Respect free-tier request rate
+        time.sleep(DELAY_BETWEEN_BATCHES_SEC)
 
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Ingestion stopped at batch starting at index {batch_start}: {e}")
-        raise
-    finally:
-        db.close()
-
-    print(f"\n🎉 Ingestion complete! Successfully ingested {inserted} real Dubai properties into PostgreSQL with 768-dim embeddings.")
+    print(f"\n🎉 Ingestion cycle complete! Current property count in DB: {len(existing_ids) + inserted}")
 
 
 if __name__ == "__main__":
-    run_ingestion()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of rows to ingest")
+    parser.add_argument("--reset", action="store_true", help="Reset DB table before ingesting")
+    args = parser.parse_args()
+    run_ingestion(limit=args.limit, reset_table=args.reset)
