@@ -24,8 +24,9 @@ from app.db.models import Property
 from app.embeddings import get_embeddings_batch
 
 DATASET_URL = "https://raw.githubusercontent.com/Sukesh1985/Dubai-real-estate-Power-BI/main/Dubai_Real_Estate_Dataset.csv"
-BATCH_SIZE = 15  # Keeps per-minute requests well under the 100 req/min free tier limit
-DELAY_BETWEEN_BATCHES_SEC = 12.0  # 15 items / 12s = ~75 reqs/min
+BATCH_SIZE = 50  # 50 records per batch in a single API request
+DELAY_BETWEEN_BATCHES_SEC = 3.0  # Safe pacing to respect Google API rate limits
+
 
 
 def build_embed_text(row: dict) -> str:

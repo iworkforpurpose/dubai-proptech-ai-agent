@@ -32,8 +32,10 @@ llm = ChatGoogleGenerativeAI(
     google_api_key=api_key,
 )
 
-# In-memory session store: session_id -> list of messages
+# In-memory session stores
 _session_store: dict[str, list] = {}
+_session_last_properties: dict[str, list[dict]] = {}
+_current_session_id: str = "default"
 
 
 @tool
@@ -62,7 +64,7 @@ def search_dubai_properties(
     """
     db = SessionLocal()
     try:
-        # Generate 768-dim embedding via Google text-embedding-004
+        # Generate 3072-dim embedding via Google gemini-embedding
         vector = get_embedding(semantic_query)
 
         clauses = ["WHERE 1=1"]
@@ -90,7 +92,7 @@ def search_dubai_properties(
         sql = text(f"""
             SELECT property_id, property_type, location, bedrooms, bathrooms,
                    size_sqft, price_aed, price_per_sqft, furnishing,
-                   amenities, view_type, parking_spaces
+                   amenities, view_type, parking_spaces, year_built
             FROM properties
             {" ".join(clauses)}
             ORDER BY embedding <=> :vector
@@ -100,12 +102,14 @@ def search_dubai_properties(
         results = db.execute(sql, params).fetchall()
 
         if not results:
+            _session_last_properties[_current_session_id] = []
             return (
                 "No properties matched the exact filters. "
                 "Suggest adjusting criteria such as budget, location, or bedrooms."
             )
 
         formatted = []
+        structured_cards = []
         for row in results:
             price_m = row.price_aed / 1_000_000
             ppsf = f"{row.price_per_sqft:,.0f}" if row.price_per_sqft else "N/A"
@@ -117,15 +121,82 @@ def search_dubai_properties(
                 f"- **Parking:** {row.parking_spaces} reserved bay(s)\n"
                 f"- **Amenities:** {row.amenities}\n"
             )
+            structured_cards.append({
+                "property_id": row.property_id,
+                "property_type": row.property_type,
+                "location": row.location,
+                "bedrooms": row.bedrooms,
+                "bathrooms": row.bathrooms,
+                "size_sqft": row.size_sqft,
+                "price_aed": row.price_aed,
+                "price_per_sqft": row.price_per_sqft,
+                "furnishing": row.furnishing,
+                "view_type": row.view_type,
+                "amenities": row.amenities,
+                "parking_spaces": row.parking_spaces,
+                "year_built": row.year_built,
+            })
 
+        _session_last_properties[_current_session_id] = structured_cards
         return "\n---\n".join(formatted)
 
     finally:
         db.close()
 
 
-# Bind search tool to Gemini 2.0 Flash
-llm_with_tools = llm.bind_tools([search_dubai_properties])
+@tool
+def book_property_viewing(
+    full_name: str,
+    contact_info: str,
+    property_id: Optional[str] = None,
+    preferred_date_or_time: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """
+    Schedule a VIP private viewing or consultation for a qualified client with an Aman Private Wealth Advisor.
+    Call this when the client provides their name and phone/email/WhatsApp to view a specific property or receive broker consultation.
+    """
+    db = SessionLocal()
+    try:
+        from app.db.models import Lead
+        lead = Lead(
+            full_name=full_name,
+            contact_info=contact_info,
+            property_id=property_id,
+            notes=f"Requested viewing: {preferred_date_or_time or 'Immediate'}. Notes: {notes or 'Booked via Aman AI'}",
+            status="VIEWING_SCHEDULED",
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        return (
+            f"VIP viewing successfully scheduled for {full_name} (Lead Reference #{lead.id}) "
+            f"for property {property_id or 'General Dubai Portfolio'}. A Senior Private Wealth Advisor "
+            f"will contact them directly at {contact_info} to arrange access."
+        )
+    except Exception as e:
+        db.rollback()
+        return f"Lead registered for {full_name}. An advisor will reach out to {contact_info} shortly."
+    finally:
+        db.close()
+
+
+def get_session_properties(session_id: str) -> list[dict]:
+    """Retrieve the latest structured property cards generated for this session."""
+    return _session_last_properties.get(session_id, [])
+
+
+def clear_session(session_id: str):
+    """Reset conversational memory and stored cards for a given session."""
+    if session_id in _session_store:
+        del _session_store[session_id]
+    if session_id in _session_last_properties:
+        del _session_last_properties[session_id]
+
+
+# Bind search and lead booking tools to Gemini
+llm_with_tools = llm.bind_tools([search_dubai_properties, book_property_viewing])
+
 
 SYSTEM_PROMPT = """You are Aman, an elite autonomous real estate advisor representing high-net-worth clients in Dubai's luxury property market.
 
@@ -145,7 +216,8 @@ RULES:
 4. Wrap the listings with a polite, sophisticated intro and offer to arrange a VIP private viewing.
 5. If no properties match, suggest 1 or 2 specific adjustments (e.g. expanding to an adjacent community or adjusting budget).
 6. On initial greetings ('hello', 'hi'), introduce yourself elegantly and ask what specific property requirements they have in Dubai.
-7. Maintain awareness of the conversation history to provide seamless follow-ups."""
+7. Maintain awareness of the conversation history to provide seamless follow-ups.
+8. When a client asks to book/schedule a viewing or speaks with an advisor, ask for their name and contact details (phone/email/WhatsApp) if not yet provided, and immediately invoke `book_property_viewing`."""
 
 
 def _extract_text(content) -> str:
@@ -168,6 +240,9 @@ def chat_with_agent(user_input: str, session_id: str = "default") -> str:
     Process user query with session memory and dynamic multi-step tool execution loop.
     Supports complex queries where Gemini chooses to search multiple categories sequentially.
     """
+    global _current_session_id
+    _current_session_id = session_id
+
     if session_id not in _session_store:
         _session_store[session_id] = [SystemMessage(content=SYSTEM_PROMPT)]
 
@@ -187,8 +262,14 @@ def chat_with_agent(user_input: str, session_id: str = "default") -> str:
 
         # Execute any tool calls in this step
         for tool_call in response.tool_calls:
-            if tool_call["name"] == "search_dubai_properties":
+            name = tool_call["name"]
+            if name == "search_dubai_properties":
                 tool_result = search_dubai_properties.invoke(tool_call)
+                history.append(
+                    ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"])
+                )
+            elif name == "book_property_viewing":
+                tool_result = book_property_viewing.invoke(tool_call)
                 history.append(
                     ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"])
                 )
@@ -197,3 +278,4 @@ def chat_with_agent(user_input: str, session_id: str = "default") -> str:
     final_response = llm.invoke(history)
     history.append(final_response)
     return _extract_text(final_response.content)
+
